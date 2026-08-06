@@ -96,6 +96,21 @@ gitpass version
 
 `GITPASS_DIR` chooses the vault, `GITPASS_PASSPHRASE` skips the prompt.
 
+### Importing
+
+`gitpass add` takes a JSON array, so migrating is a format conversion rather
+than a feature. For KeePassXC:
+
+```sh
+keepassxc-cli export --format csv db.kdbx > export.csv
+./scripts/keepassxc-csv.py export.csv | gitpass add
+shred -u export.csv                    # it is plaintext
+```
+
+Titles, usernames, passwords, URLs, notes and `otpauth://` TOTP URIs all carry
+over; groups become tags. Icons and KeePassXC's own timestamps do not — entries
+are stamped with the time of import.
+
 ## Security model
 
 ```
