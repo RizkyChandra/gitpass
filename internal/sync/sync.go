@@ -13,6 +13,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-git/go-git/v5"
@@ -130,6 +131,22 @@ func syncOnce(v *vault.Vault, repo *git.Repository, auth transport.AuthMethod) (
 		return Result{Action: "pushed"}, push(repo, auth)
 	}
 
+	// Two vaults always share their init commit. No merge base means the
+	// remote is somebody else's repository — most often a GitHub repo created
+	// with "Add a README". Rebasing onto it would reset the worktree to a tree
+	// with no identity.age in it, and since only entries are replayed the key
+	// file would be dropped and an undecryptable vault pushed in its place.
+	bases, err := localCommit.MergeBase(remoteCommit)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(bases) == 0 {
+		return Result{}, fmt.Errorf(
+			"remote has an unrelated history and is not this vault — point at an "+
+				"empty repository, or run `gitpass clone %s` on a fresh machine if it "+
+				"already holds a vault", remoteURL(repo))
+	}
+
 	kept, err := unionRebase(v, repo, remote.Hash())
 	if err != nil {
 		return Result{}, err
@@ -148,6 +165,13 @@ func unionRebase(v *vault.Vault, repo *git.Repository, onto plumbing.Hash) (int,
 	}
 	if err := reset(repo, onto); err != nil {
 		return 0, err
+	}
+
+	// Belt and braces behind the merge-base check above. Losing this file is
+	// unrecoverable for anyone who only has the pushed copy, so refuse to
+	// commit rather than publish a vault nobody can open.
+	if _, err := os.Stat(filepath.Join(v.Dir, "identity.age")); err != nil {
+		return 0, fmt.Errorf("refusing to merge: the remote tree has no identity.age (%w)", err)
 	}
 
 	kept := 0
@@ -180,6 +204,15 @@ func wins(mine, theirs vault.Entry) bool {
 	a, _ := json.Marshal(mine)
 	b, _ := json.Marshal(theirs)
 	return string(a) > string(b)
+}
+
+// remoteURL reports origin's URL for error messages, empty if unset.
+func remoteURL(repo *git.Repository) string {
+	remote, err := repo.Remote("origin")
+	if err != nil || len(remote.Config().URLs) == 0 {
+		return "<url>"
+	}
+	return remote.Config().URLs[0]
 }
 
 func reset(repo *git.Repository, to plumbing.Hash) error {

@@ -1,12 +1,16 @@
 package sync
 
 import (
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/plumbing"
+	"github.com/go-git/go-git/v5/plumbing/filemode"
+	"github.com/go-git/go-git/v5/plumbing/object"
 
 	"github.com/RizkyChandra/gitpass/internal/vault"
 )
@@ -224,5 +228,108 @@ func TestUpToDate(t *testing.T) {
 	mustSync(t, a)
 	if r := mustSync(t, a); r.Action != "up-to-date" {
 		t.Fatalf("expected up-to-date, got %s", r)
+	}
+}
+
+// A brand-new repository on a git host has no refs at all. This is the normal
+// first-sync path and must just push.
+func TestFirstSyncIntoAnEmptyRemote(t *testing.T) {
+	remote := newRemote(t) // bare, no commits — what `gh repo create` gives you
+	a := newVault(t, remote)
+	e, _ := a.Put(vault.Entry{Name: "github.com", Password: "hunter2"})
+
+	if r := mustSync(t, a); r.Action != "pushed" {
+		t.Fatalf("first sync into an empty remote: got %s, want pushed", r)
+	}
+	b := clone(t, remote)
+	if got := get(t, b, e.ID); got.Password != "hunter2" {
+		t.Fatalf("clone of the freshly seeded remote lost data: %+v", got)
+	}
+}
+
+// A repo created with GitHub's "Add a README" is *not* empty: it has a commit,
+// and it shares no history with the vault. Rebasing onto it would reset the
+// worktree to a tree containing no identity.age, and since unionRebase replays
+// only entries the key would be dropped and an unopenable vault pushed.
+func TestRefusesRemoteWithUnrelatedHistory(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "seeded")
+	repo, err := git.PlainInitWithOptions(dir, &git.PlainInitOptions{
+		Bare:        true,
+		InitOptions: git.InitOptions{DefaultBranch: plumbing.ReferenceName("refs/heads/main")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedCommit(t, repo)
+
+	v := newVault(t, dir)
+	e, _ := v.Put(vault.Entry{Name: "github.com", Password: "hunter2"})
+
+	_, err = Sync(v)
+	if err == nil {
+		t.Fatal("synced onto an unrelated history instead of refusing")
+	}
+	if !strings.Contains(err.Error(), "unrelated history") {
+		t.Fatalf("unhelpful error: %v", err)
+	}
+
+	// The vault must be untouched: still openable, entry still readable.
+	if _, statErr := os.Stat(filepath.Join(v.Dir, "identity.age")); statErr != nil {
+		t.Fatalf("the refused sync destroyed the vault key: %v", statErr)
+	}
+	if got := get(t, v, e.ID); got.Password != "hunter2" {
+		t.Fatalf("the refused sync damaged an entry: %+v", got)
+	}
+}
+
+func ghSignature(when time.Time) object.Signature {
+	return object.Signature{Name: "GitHub", Email: "noreply@github.com", When: when}
+}
+
+// seedCommit writes one commit straight into a bare repo, the way a host does
+// when it initialises a repository with a README.
+func seedCommit(t *testing.T, repo *git.Repository) {
+	t.Helper()
+	blob := repo.Storer.NewEncodedObject()
+	blob.SetType(plumbing.BlobObject)
+	w, err := blob.Writer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Write([]byte("# my vault\n"))
+	w.Close()
+	blobHash, err := repo.Storer.SetEncodedObject(blob)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tree := &object.Tree{Entries: []object.TreeEntry{
+		{Name: "README.md", Mode: filemode.Regular, Hash: blobHash},
+	}}
+	treeObj := repo.Storer.NewEncodedObject()
+	if err := tree.Encode(treeObj); err != nil {
+		t.Fatal(err)
+	}
+	treeHash, err := repo.Storer.SetEncodedObject(treeObj)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	when := base
+	commit := &object.Commit{
+		Author: ghSignature(when), Committer: ghSignature(when),
+		Message: "Initial commit", TreeHash: treeHash,
+	}
+	commitObj := repo.Storer.NewEncodedObject()
+	if err := commit.Encode(commitObj); err != nil {
+		t.Fatal(err)
+	}
+	commitHash, err := repo.Storer.SetEncodedObject(commitObj)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ref := plumbing.NewHashReference(plumbing.ReferenceName("refs/heads/main"), commitHash)
+	if err := repo.Storer.SetReference(ref); err != nil {
+		t.Fatal(err)
 	}
 }

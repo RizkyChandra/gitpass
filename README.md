@@ -161,6 +161,12 @@ transport follows the URL scheme:
 `gitpass sync` reports what it did: `up-to-date`, `pulled`, `pushed`, or
 `merged (2 local entries kept)`.
 
+**Point it at a genuinely empty repository.** A brand-new repo with no commits
+is the expected first-sync target and just works. A repo created with GitHub's
+"Add a README" is *not* empty — it has a commit sharing no history with your
+vault — and sync refuses it rather than resetting onto a tree that has no
+`identity.age` in it, which would push a vault nobody could open.
+
 ## Development
 
 ```sh
