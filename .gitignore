@@ -15,3 +15,4 @@ android/.kotlin/
 # The Go core is a 17MB binary artifact — build it with `just aar`, don't commit it.
 android/app/libs/*.aar
 android/app/libs/*.jar
+!android/app/libs/.gitkeep

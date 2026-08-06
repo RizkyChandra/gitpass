@@ -70,6 +70,7 @@ aar:
     command -v javac >/dev/null || { echo "javac not found — install a JDK (gomobile shells out to it)"; exit 1; }
     command -v gomobile >/dev/null || go install golang.org/x/mobile/cmd/gomobile@latest
     command -v gobind >/dev/null || go install golang.org/x/mobile/cmd/gobind@latest
+    mkdir -p android/app/libs
     # -androidapi 24: gomobile rejects its own default of 16. The two ABIs here
     # must match the abiFilters in android/app/build.gradle.kts.
     gomobile bind -target=android/arm64,android/amd64 -androidapi {{ android_api }} \

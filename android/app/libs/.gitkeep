@@ -1,0 +1,2 @@
+# `just aar` writes gitpass.aar here. The .aar itself is a 17MB build artifact
+# and is gitignored; this file only keeps the directory present on checkout.
