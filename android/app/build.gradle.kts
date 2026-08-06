@@ -38,9 +38,9 @@ android {
         // Autofill arrived in API 26; the Go .aar is built for 24 and up.
         minSdk = 26
         targetSdk = 35
-        // Overridable from CI: -PversionName=1.2.0 -PversionCode=2
-        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 2
-        versionName = (project.findProperty("versionName") as String?) ?: "1.2.0"
+        // Overridable from CI: -PversionName=1.3.0 -PversionCode=3
+        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 3
+        versionName = (project.findProperty("versionName") as String?) ?: "1.3.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // The Go core ships as a native library, and gomobile only built these
