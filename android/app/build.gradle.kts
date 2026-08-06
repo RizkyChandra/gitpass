@@ -1,3 +1,4 @@
+import java.io.File
 import java.util.Properties
 
 plugins {
@@ -13,13 +14,31 @@ plugins {
  * is present the release build is simply left unsigned rather than failing —
  * a fresh clone should still be able to compile.
  */
+// Keeping the keystore outside the repo is the safer arrangement, so the path
+// is configurable rather than fixed at android/keystore.properties.
+val keystorePropertiesPath: String =
+    System.getenv("GITPASS_KEYSTORE_PROPERTIES") ?: "keystore.properties"
+
 val keystoreProperties = Properties().apply {
-    val file = rootProject.file("keystore.properties")
+    val file = File(keystorePropertiesPath).let {
+        if (it.isAbsolute) it else rootProject.file(keystorePropertiesPath)
+    }
     if (file.exists()) file.inputStream().use { load(it) }
 }
 
 fun signingValue(key: String, env: String): String? =
     keystoreProperties.getProperty(key) ?: System.getenv(env)
+
+// storeFile is relative to the properties file when it is not absolute, so a
+// keystore kept beside it outside the repo resolves correctly.
+fun resolveKeystore(path: String): File {
+    val f = File(path)
+    if (f.isAbsolute) return f
+    val propsDir = File(keystorePropertiesPath).let {
+        if (it.isAbsolute) it.parentFile else rootProject.projectDir
+    }
+    return File(propsDir, path)
+}
 
 val releaseStoreFile = signingValue("storeFile", "GITPASS_KEYSTORE")
 val releaseStorePassword = signingValue("storePassword", "GITPASS_KEYSTORE_PASSWORD")
@@ -27,7 +46,7 @@ val releaseKeyAlias = signingValue("keyAlias", "GITPASS_KEY_ALIAS")
 val releaseKeyPassword = signingValue("keyPassword", "GITPASS_KEY_PASSWORD")
 val canSignRelease = listOf(
     releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword,
-).all { !it.isNullOrBlank() } && rootProject.file(releaseStoreFile!!).exists()
+).all { !it.isNullOrBlank() } && resolveKeystore(releaseStoreFile!!).exists()
 
 android {
     namespace = "com.gitpass"
@@ -71,7 +90,7 @@ android {
     signingConfigs {
         if (canSignRelease) {
             create("release") {
-                storeFile = rootProject.file(releaseStoreFile!!)
+                storeFile = resolveKeystore(releaseStoreFile!!)
                 storePassword = releaseStorePassword
                 keyAlias = releaseKeyAlias
                 keyPassword = releaseKeyPassword

@@ -232,8 +232,19 @@ just keystore      # once — generates android/keystore.{jks,properties}
 just apk-release   # signed, minified APK
 ```
 
-**Back up `android/keystore.jks` and `android/keystore.properties` immediately,
-somewhere you will still have in five years.** Android identifies an app by its
+Keeping the keystore outside the repo is safer, and supported — point
+`GITPASS_KEYSTORE_PROPERTIES` at wherever you moved it:
+
+```sh
+export GITPASS_KEYSTORE_PROPERTIES=~/keys/gitpass/keystore.properties
+just apk-release
+```
+
+`storeFile` inside that file is resolved relative to the file itself, so a
+keystore sitting beside it needs no absolute path.
+
+**Back up the keystore and its properties file immediately, somewhere you will
+still have in five years.** Android identifies an app by its
 signing key: lose it and you cannot ship an update that existing installs will
 accept, and the only way forward is a new package name. Both files are
 gitignored — never commit them.

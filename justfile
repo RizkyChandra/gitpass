@@ -93,7 +93,8 @@ android-install: apk
 apk-release: aar
     #!/usr/bin/env bash
     set -euo pipefail
-    [ -f android/keystore.properties ] || { echo "no android/keystore.properties — run \`just keystore\` first"; exit 1; }
+    props="${GITPASS_KEYSTORE_PROPERTIES:-android/keystore.properties}"
+    [ -f "$props" ] || { echo "no $props — run \`just keystore\`, or set GITPASS_KEYSTORE_PROPERTIES to where you moved it"; exit 1; }
     cd android && ./gradlew assembleRelease
     apk=android/app/build/outputs/apk/release/app-release.apk
     cd .. && "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose "$apk" | head -4
