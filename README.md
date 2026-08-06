@@ -39,10 +39,13 @@ history of complete snapshots.
 
 Deleting writes a tombstone rather than removing the file, which makes a delete
 just another update — no special case, and no entry resurrected by another
-device's stale copy.
+device's stale copy. `gitpass gc` drops tombstones once they are old enough that
+every device has certainly seen them (90 days by default).
 
 Entry names live *inside* the encrypted blob, never in filenames or commit
-messages. `git log` on your vault leaks nothing but timing and entry count.
+messages, and every entry is padded to a 512-byte boundary before encryption so
+its size says nothing about its contents. `git log` on your vault leaks nothing
+but timing and a rough entry count.
 
 ## Install
 
@@ -87,6 +90,8 @@ else has written to it in the meantime.
 gitpass get github          # print a password
 gitpass totp github         # print the current TOTP code
 gitpass add < entries.json  # bulk import; takes one object or an array
+gitpass gc [days]           # drop tombstones older than days (default 90)
+gitpass version
 ```
 
 `GITPASS_DIR` chooses the vault, `GITPASS_PASSPHRASE` skips the prompt.
@@ -111,8 +116,9 @@ scrypt runs at `logN=17` (~128MB) rather than age's default 18 (~256MB), because
 the same code has to derive keys inside an Android app. The factor is recorded
 in the age header, so raising it later needs no migration.
 
-**Known leaks:** the number of entries and their approximate sizes. Names,
-usernames and tags are all inside the ciphertext.
+**Known leaks:** roughly how many entries you have. Names, usernames, tags and
+sizes are all inside the ciphertext — entries are padded to 512-byte blocks, so
+a bare login and one with a long secure note produce identical files.
 
 ### Recovery without gitpass
 
@@ -161,18 +167,44 @@ cmd/gitpass/      TUI and CLI
 
 ## Android
 
-The core is deliberately gomobile-clean: every value crosses the JNI boundary as
-a JSON string, because gomobile cannot bind maps or slices of structs. `just
-aar` produces `gitpass.aar` for a Compose app to consume, and CI builds it on
-every push so the facade cannot silently break.
+A Compose app in `android/`, sharing the exact same Go core through a gomobile
+binding — every value crosses the JNI boundary as a JSON string, because
+gomobile cannot bind maps or slices of structs.
 
-The app itself is not written yet. Planned: unlock, search, detail with live
-TOTP, edit, sync. Autofill comes after that.
+```sh
+just aar              # build the Go core into android/app/libs/
+just apk              # assemble the debug APK and run unit tests
+just android-test     # instrumented tests, needs an emulator or device
+just android-install
+```
+
+It does unlock, search, detail with a live TOTP countdown, add/edit/delete,
+sync, and tombstone collection. Copied secrets are marked sensitive so Android
+13+ keeps them out of the clipboard preview, and every screen sets `FLAG_SECURE`
+so passwords stay out of screenshots and the recents thumbnail.
+
+### Autofill
+
+Enable gitpass under **Settings → Passwords & accounts → Autofill service** and
+it will offer logins inside other apps and browsers.
+
+Fields are located by autofill hints where apps provide them, and otherwise by
+input type and by the id/hint text — most real screens set no hints at all.
+Entries are matched against the web domain or, for a native app, the brand
+segment of its package name (`com.github.android` → `github`), scored rather
+than filtered so a near miss shows an extra row instead of nothing.
+
+When the vault is locked the service answers with an authentication request, so
+Android shows a small unlock prompt and only then fills. Saving a new login from
+a signup form works too, as long as the vault is already unlocked.
+
+The `.aar` is a 17MB binary and is not committed; `just aar` builds it and CI
+rebuilds it on every push, so the facade cannot silently break.
 
 ## Not implemented
 
 Attachments, password history, breach checks, browser extension, field-level
-merge, tombstone garbage collection, size padding.
+merge, biometric unlock, an idle auto-lock timeout.
 
 ## License
 

@@ -15,6 +15,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime/debug"
+	"strconv"
 	"strings"
 	"time"
 
@@ -59,15 +61,33 @@ func run(args []string) error {
 		return cmdTOTP(args)
 	case "add":
 		return cmdAdd()
-	case "version", "--version":
-		fmt.Println(version)
+	case "gc":
+		return cmdGC(args)
+	case "version", "-v", "-V", "-version", "--version":
+		fmt.Println(versionString())
 		return nil
-	case "-h", "--help", "help":
+	case "help", "-h", "-help", "--help":
 		fmt.Print(usage)
 		return nil
 	default:
-		return fmt.Errorf("unknown command %q (try --help)", cmd)
+		fmt.Fprint(os.Stderr, usage)
+		return fmt.Errorf("unknown command %q", cmd)
 	}
+}
+
+// versionString reports the release version when the linker set one, and
+// otherwise falls back to the module version recorded in the binary. Without
+// the fallback every `go install ...@v1.0.0` build would claim to be "dev".
+func versionString() string {
+	if version != "dev" {
+		return version
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		if v := bi.Main.Version; v != "" && v != "(devel)" {
+			return v
+		}
+	}
+	return version
 }
 
 const usage = `gitpass — a git-backed password manager
@@ -81,6 +101,8 @@ const usage = `gitpass — a git-backed password manager
   gitpass add            add entries from JSON on stdin
   gitpass get <name>     print one entry's password
   gitpass totp <name>    print the current TOTP code
+  gitpass gc [days]      drop tombstones older than days (default 90)
+  gitpass version        print the version
 
 The vault lives in $GITPASS_DIR (default ~/.local/share/gitpass/vault).
 `
@@ -266,6 +288,29 @@ func cmdAdd() error {
 		}
 	}
 	fmt.Fprintf(os.Stderr, "added %d %s\n", len(entries), map[bool]string{true: "entry", false: "entries"}[len(entries) == 1])
+	return nil
+}
+
+// cmdGC drops old tombstones. The age limit exists so that a device which has
+// been offline for a while cannot resurrect entries deleted elsewhere.
+func cmdGC(args []string) error {
+	age := vault.DefaultGCAge
+	if len(args) == 1 {
+		days, err := strconv.Atoi(args[0])
+		if err != nil || days <= 0 {
+			return fmt.Errorf("gc takes a positive number of days, got %q", args[0])
+		}
+		age = time.Duration(days) * 24 * time.Hour
+	}
+	v, err := open()
+	if err != nil {
+		return err
+	}
+	n, err := v.GC(age)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(os.Stderr, "dropped %d tombstone(s); run `gitpass sync` to publish\n", n)
 	return nil
 }
 

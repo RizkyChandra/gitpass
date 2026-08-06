@@ -4,3 +4,14 @@
 /dist/
 /.demo/
 coverage.out
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+android/.kotlin/
+# The Go core is a 17MB binary artifact — build it with `just aar`, don't commit it.
+android/app/libs/*.aar
+android/app/libs/*.jar

@@ -70,15 +70,20 @@ jobs:
 
       # Proves the gomobile facade still binds: gobind type-checks the exported
       # API against the narrow set of types it can cross the JNI boundary with.
-      - name: Bind the Android library
+      - name: Bind the Go core
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
         run: |
           go install golang.org/x/mobile/cmd/gomobile@latest
           go install golang.org/x/mobile/cmd/gobind@latest
-          gomobile bind -target=android/arm64 -androidapi 24 -o gitpass.aar ./mobile
+          gomobile bind -target=android/arm64,android/amd64 -androidapi 24 \
+            -o android/app/libs/gitpass.aar ./mobile
+
+      - name: Build the app and run its unit tests
+        working-directory: android
+        run: ./gradlew assembleDebug testDebugUnitTest
 
       - uses: actions/upload-artifact@v4
         with:
-          name: gitpass-aar
-          path: gitpass.aar
+          name: gitpass-debug-apk
+          path: android/app/build/outputs/apk/debug/*.apk

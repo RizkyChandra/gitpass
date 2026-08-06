@@ -40,6 +40,19 @@ import (
 // raising it later needs no migration of existing vaults.
 const scryptWorkFactor = 17
 
+// padBlock rounds every entry's plaintext up to a multiple of this many bytes
+// before encryption, so that ciphertext size no longer betrays how much is in
+// an entry. Without it, a file's length distinguishes a bare username from one
+// carrying a long secure note, and that is visible to anyone holding the repo.
+//
+// Padding is trailing whitespace on the JSON, which encoding/json and jq both
+// ignore, so the `age -d | jq` recovery path keeps working untouched.
+//
+// ponytail: fixed 512-byte buckets, not a length-hiding scheme. A 4KB note
+// still lands in a bigger bucket than a 100-byte login; only the fine detail
+// is hidden. Switch to exponential buckets if that distinction matters.
+const padBlock = 512
+
 // Entry is one credential. It is the unit of both encryption and conflict
 // resolution: the whole struct is encrypted into a single file, and sync
 // resolves collisions by comparing UpdatedAt between two copies.
@@ -62,6 +75,36 @@ type Entry struct {
 	// ponytail: tombstones are never collected, add a gc subcommand if the
 	// repo gets fat.
 	Deleted bool `json:"deleted,omitempty"`
+}
+
+// UnmarshalJSON accepts an entry whose updated_at is empty or absent, treating
+// it as the zero time.
+//
+// Callers that build an entry from scratch — the Android app, an importer
+// piping JSON into `gitpass add` — have no timestamp to supply, and the plain
+// time.Time decoder rejects "" outright. Put overwrites the field anyway, so
+// demanding it here only breaks honest callers. A malformed timestamp is still
+// an error; this tolerates absence, not nonsense.
+func (e *Entry) UnmarshalJSON(b []byte) error {
+	type entry Entry // avoids recursing into this method
+	aux := struct {
+		UpdatedAt string `json:"updated_at"`
+		*entry
+	}{entry: (*entry)(e)}
+
+	if err := json.Unmarshal(b, &aux); err != nil {
+		return err
+	}
+	if aux.UpdatedAt == "" {
+		e.UpdatedAt = time.Time{}
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, aux.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("updated_at: %w", err)
+	}
+	e.UpdatedAt = t
+	return nil
 }
 
 // Code returns the current TOTP code and how many seconds it remains valid.
@@ -309,11 +352,18 @@ func (v *Vault) WriteRaw(e Entry) error {
 	if err != nil {
 		return err
 	}
-	sealed, err := v.Seal(b)
+	sealed, err := v.Seal(pad(b))
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(entryPath(v.Dir, e.ID), sealed, 0o600)
+}
+
+// pad appends spaces until the payload fills a whole number of padBlock-sized
+// blocks, hiding the true length of an entry.
+func pad(b []byte) []byte {
+	n := ((len(b) / padBlock) + 1) * padBlock
+	return append(b, bytes.Repeat([]byte{' '}, n-len(b))...)
 }
 
 // Delete writes a tombstone rather than removing the file, so that the delete
@@ -363,6 +413,43 @@ func finish(wt *git.Worktree, msg string) error {
 		return nil
 	}
 	return err
+}
+
+// DefaultGCAge is how long a tombstone must sit before GC will drop it.
+//
+// This is not arbitrary caution. Sync decides conflicts by comparing an entry
+// against its counterpart; once the tombstone is gone there is nothing left to
+// beat, so a device that last synced before the delete would push its stale
+// copy back and resurrect the entry. The window therefore has to exceed the
+// longest realistic gap between syncs on any device you own.
+const DefaultGCAge = 90 * 24 * time.Hour
+
+// GC permanently removes tombstones older than olderThan and returns how many
+// it dropped. Everything it deletes remains in git history, so a mistake is
+// recoverable with git alone.
+func (v *Vault) GC(olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		return 0, errors.New("refusing to collect tombstones with no age limit: deleted entries would come back from any device that has not synced since")
+	}
+	all, err := v.All()
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().UTC().Add(-olderThan)
+	dropped := 0
+	for _, e := range all {
+		if !e.Deleted || e.UpdatedAt.After(cutoff) {
+			continue
+		}
+		if err := os.Remove(entryPath(v.Dir, e.ID)); err != nil {
+			return dropped, err
+		}
+		dropped++
+	}
+	if dropped == 0 {
+		return 0, nil
+	}
+	return dropped, v.CommitAll(fmt.Sprintf("gc: drop %d tombstone%s", dropped, map[bool]string{true: "", false: "s"}[dropped == 1]))
 }
 
 // Repo exposes the underlying repository to internal/sync.

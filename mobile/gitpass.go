@@ -111,6 +111,12 @@ func (v *Vault) Sync() (string, error) {
 	return res.String(), nil
 }
 
+// GC drops tombstones older than the given number of days and returns how many
+// went. Pass 0 or less and it refuses: see vault.DefaultGCAge.
+func (v *Vault) GC(days int) (int, error) {
+	return v.v.GC(time.Duration(days) * 24 * time.Hour)
+}
+
 // SetRemote points the vault at a git remote.
 func (v *Vault) SetRemote(url string) error { return sync.SetRemote(v.v, url) }
 
