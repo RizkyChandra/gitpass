@@ -176,6 +176,9 @@ just aar              # build the Go core into android/app/libs/
 just apk              # assemble the debug APK and run unit tests
 just android-test     # instrumented tests, needs an emulator or device
 just android-install
+just keystore         # create a signing key (once)
+just apk-release      # signed release APK
+just aab              # signed bundle for Play
 ```
 
 It does unlock, search, detail with a live TOTP countdown, add/edit/delete,
@@ -200,6 +203,38 @@ a signup form works too, as long as the vault is already unlocked.
 
 The `.aar` is a 17MB binary and is not committed; `just aar` builds it and CI
 rebuilds it on every push, so the facade cannot silently break.
+
+### Signing a release
+
+```sh
+just keystore      # once — generates android/keystore.{jks,properties}
+just apk-release   # signed, minified APK
+```
+
+**Back up `android/keystore.jks` and `android/keystore.properties` immediately,
+somewhere you will still have in five years.** Android identifies an app by its
+signing key: lose it and you cannot ship an update that existing installs will
+accept, and the only way forward is a new package name. Both files are
+gitignored — never commit them.
+
+Release builds run R8, which is why `proguard-rules.pro` keeps the gomobile JNI
+classes and the kotlinx.serialization generated serializers. Both are reached
+only reflectively, so R8 sees no references and would otherwise strip them, and
+the app would compile and then fail the first time it decoded an entry.
+
+To have CI attach a signed APK and bundle to each release, set the repository
+variable `ANDROID_SIGNING_ENABLED` to `true` and add four secrets:
+
+```sh
+gh secret set ANDROID_KEYSTORE_BASE64   < <(base64 -w0 android/keystore.jks)
+gh secret set ANDROID_KEYSTORE_PASSWORD        # from keystore.properties
+gh secret set ANDROID_KEY_ALIAS                # gitpass
+gh secret set ANDROID_KEY_PASSWORD             # from keystore.properties
+gh variable set ANDROID_SIGNING_ENABLED --body true
+```
+
+Without them the Android release job is skipped, rather than publishing an
+unsigned APK nobody can install.
 
 ## Not implemented
 

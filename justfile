@@ -89,6 +89,37 @@ android-test: aar
 android-install: apk
     cd android && ./gradlew installDebug
 
+# Build the signed release APK. Needs android/keystore.properties — see `just keystore`.
+apk-release: aar
+    #!/usr/bin/env bash
+    set -euo pipefail
+    [ -f android/keystore.properties ] || { echo "no android/keystore.properties — run \`just keystore\` first"; exit 1; }
+    cd android && ./gradlew assembleRelease
+    apk=android/app/build/outputs/apk/release/app-release.apk
+    cd .. && "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify --verbose "$apk" | head -4
+    ls -la "$apk"
+
+# Build the signed .aab for Play. Play needs a bundle, not an APK.
+aab: aar
+    cd android && ./gradlew bundleRelease
+
+# Create a release signing keystore. Run once, then back up both files forever.
+keystore:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd android
+    [ -f keystore.jks ] && { echo "keystore.jks already exists — refusing to overwrite it"; exit 1; }
+    pass=$(openssl rand -base64 32 | tr -d '/+=' | head -c 32)
+    keytool -genkeypair -v -keystore keystore.jks -alias gitpass \
+        -keyalg RSA -keysize 4096 -validity 10000 \
+        -storepass "$pass" -keypass "$pass" \
+        -dname "CN=gitpass, O=$(git config user.name), C=ID"
+    printf 'storeFile=keystore.jks\nstorePassword=%s\nkeyAlias=gitpass\nkeyPassword=%s\n' "$pass" "$pass" > keystore.properties
+    chmod 600 keystore.jks keystore.properties
+    echo
+    echo "Back up android/keystore.jks AND android/keystore.properties now."
+    echo "Lose them and you can never ship an update existing installs will accept."
+
 # Check the goreleaser config and build a local snapshot into ./dist.
 release-snapshot:
     goreleaser release --snapshot --clean

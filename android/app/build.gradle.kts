@@ -1,9 +1,33 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
     id("org.jetbrains.kotlin.plugin.compose")
     id("org.jetbrains.kotlin.plugin.serialization")
 }
+
+/**
+ * Signing credentials come from keystore.properties, which is gitignored, and
+ * fall back to environment variables so CI can sign from secrets. When neither
+ * is present the release build is simply left unsigned rather than failing —
+ * a fresh clone should still be able to compile.
+ */
+val keystoreProperties = Properties().apply {
+    val file = rootProject.file("keystore.properties")
+    if (file.exists()) file.inputStream().use { load(it) }
+}
+
+fun signingValue(key: String, env: String): String? =
+    keystoreProperties.getProperty(key) ?: System.getenv(env)
+
+val releaseStoreFile = signingValue("storeFile", "GITPASS_KEYSTORE")
+val releaseStorePassword = signingValue("storePassword", "GITPASS_KEYSTORE_PASSWORD")
+val releaseKeyAlias = signingValue("keyAlias", "GITPASS_KEY_ALIAS")
+val releaseKeyPassword = signingValue("keyPassword", "GITPASS_KEY_PASSWORD")
+val canSignRelease = listOf(
+    releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword,
+).all { !it.isNullOrBlank() } && rootProject.file(releaseStoreFile!!).exists()
 
 android {
     namespace = "com.gitpass"
@@ -14,8 +38,9 @@ android {
         // Autofill arrived in API 26; the Go .aar is built for 24 and up.
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        // Overridable from CI: -PversionName=1.2.0 -PversionCode=2
+        versionCode = (project.findProperty("versionCode") as String?)?.toInt() ?: 2
+        versionName = (project.findProperty("versionName") as String?) ?: "1.2.0"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // The Go core ships as a native library, and gomobile only built these
@@ -43,10 +68,30 @@ android {
         }
     }
 
+    signingConfigs {
+        if (canSignRelease) {
+            create("release") {
+                storeFile = rootProject.file(releaseStoreFile!!)
+                storePassword = releaseStorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+                // v1 (JAR signing) is only needed below API 24 and minSdk is 26,
+                // so it is left off. v3 carries the rotation proof that lets
+                // this key be replaced later without orphaning installs.
+                enableV2Signing = true
+                enableV3Signing = true
+            }
+        }
+    }
+
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            if (canSignRelease) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

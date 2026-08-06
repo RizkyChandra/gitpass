@@ -28,3 +28,68 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Attaches a signed APK to the release, but only when the signing secrets are
+  # configured. Without them the job is skipped rather than shipping an unsigned
+  # APK that nobody can install as an update.
+  android:
+    runs-on: ubuntu-latest
+    needs: goreleaser
+    if: ${{ vars.ANDROID_SIGNING_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          cache: true
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the NDK
+        run: sdkmanager --install "ndk;27.2.12479018" >/dev/null
+
+      - name: Build the Go core
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_HOME }}/ndk/27.2.12479018
+        run: |
+          go install golang.org/x/mobile/cmd/gomobile@latest
+          go install golang.org/x/mobile/cmd/gobind@latest
+          mkdir -p android/app/libs
+          gomobile bind -target=android/arm64,android/amd64 -androidapi 24 \
+            -o android/app/libs/gitpass.aar ./mobile
+
+      - name: Restore the keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > android/keystore.jks
+
+      - name: Build the signed APK and bundle
+        working-directory: android
+        env:
+          GITPASS_KEYSTORE: keystore.jks
+          GITPASS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          GITPASS_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          GITPASS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          ./gradlew assembleRelease bundleRelease \
+            -PversionName="$version" -PversionCode="${GITHUB_RUN_NUMBER}"
+
+      - name: Verify the signature
+        run: |
+          apksigner=$(ls "$ANDROID_HOME"/build-tools/*/apksigner | tail -1)
+          "$apksigner" verify --verbose android/app/build/outputs/apk/release/app-release.apk
+
+      - name: Attach to the release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk "gitpass-${GITHUB_REF_NAME}.apk"
+          cp android/app/build/outputs/bundle/release/app-release.aab "gitpass-${GITHUB_REF_NAME}.aab"
+          gh release upload "$GITHUB_REF_NAME" \
+            "gitpass-${GITHUB_REF_NAME}.apk" "gitpass-${GITHUB_REF_NAME}.aab" --clobber
+
+      - name: Remove the keystore from the runner
+        if: always()
+        run: rm -f android/keystore.jks

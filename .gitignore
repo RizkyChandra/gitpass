@@ -16,3 +16,9 @@ android/.kotlin/
 android/app/libs/*.aar
 android/app/libs/*.jar
 !android/app/libs/.gitkeep
+
+# Signing material. Never commit these: the keystore is the app's identity and
+# losing control of it lets anyone ship an update your users will trust.
+*.jks
+*.keystore
+android/keystore.properties
